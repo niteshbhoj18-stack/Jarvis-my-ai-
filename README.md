@@ -1,1 +1,500 @@
-# Jarvis-my-ai-
+# Jarvname: Build Jarvis
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Create Android project
+        run: |
+          mkdir -p app/src/main/java/com/jarvis/assistant
+          mkdir -p app/src/main/res/values
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "Jarvis"
+          include(":app")
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.24' apply false
+          }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
+
+          android {
+              namespace 'com.jarvis.assistant'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'com.jarvis.assistant'
+                  minSdk 24
+                  targetSdk 32
+                  versionCode 1
+                  versionName '1.0'
+                  buildConfigField "String", "GEMINI_API_KEY", "\"${System.getenv("GEMINI_API_KEY") ?: ""}\""
+              }
+
+              buildFeatures {
+                  buildConfig true
+              }
+          }
+          EOF
+                - name: Create Android manifest and MainActivity
+        run: |
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
+
+              <application
+                  android:allowBackup="false"
+                  android:label="Jarvis"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".JarvisService"
+                      android:exported="false"
+                      android:foregroundServiceType="microphone"/>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/com/jarvis/assistant/MainActivity.kt <<'EOF'
+          package com.jarvis.assistant
+
+          import android.Manifest
+          import android.app.Activity
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.os.Build
+          import android.os.Bundle
+          import android.widget.Button
+          import android.widget.LinearLayout
+          import android.widget.TextView
+          import android.view.Gravity
+
+          class MainActivity : Activity() {
+
+              private fun addButton(layout: LinearLayout, label: String, action: () -> Unit) {
+                  val button = Button(this)
+                  button.text = label
+                  layout.addView(button)
+                  button.setOnClickListener { action() }
+              }
+
+              private fun serviceAction(action: String) {
+                  val intent = Intent(this, JarvisService::class.java)
+                  intent.action = action
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      startForegroundService(intent)
+                  } else {
+                      startService(intent)
+                  }
+              }
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  val layout = LinearLayout(this)
+                  layout.orientation = LinearLayout.VERTICAL
+                  layout.gravity = Gravity.CENTER
+                  layout.setPadding(24, 24, 24, 24)
+
+                  val title = TextView(this)
+                  title.text = "JARVIS AI ASSISTANT"
+                  title.textSize = 26f
+                  title.gravity = Gravity.CENTER
+                  layout.addView(title)
+
+                  val status = TextView(this)
+                  status.text = "Select language and start Jarvis"
+                  status.textSize = 16f
+                  status.gravity = Gravity.CENTER
+                  layout.addView(status)
+
+                  addButton(layout, "ALLOW MICROPHONE") {
+                      val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
+                      if (Build.VERSION.SDK_INT >= 33) {
+                          permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+                      }
+                      requestPermissions(permissions.toTypedArray(), 100)
+                  }
+
+                  addButton(layout, "ENGLISH MODE") {
+                      serviceAction("MODE_EN")
+                      status.text = "English mode selected"
+                  }
+
+                  addButton(layout, "HINDI MODE") {
+                      serviceAction("MODE_HI")
+                      status.text = "Hindi mode selected"
+                  }
+
+                  addButton(layout, "CHANGE VOICE") {
+                      serviceAction("VOICE")
+                      status.text = "Voice change requested"
+                  }
+
+                  addButton(layout, "START JARVIS") {
+                      if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                          == PackageManager.PERMISSION_GRANTED) {
+                          serviceAction("START")
+                          status.text = "Jarvis started"
+                      } else {
+                          status.text = "Allow microphone permission first"
+                      }
+                  }
+
+                  addButton(layout, "STOP JARVIS") {
+                      stopService(Intent(this, JarvisService::class.java))
+                      status.text = "Jarvis stopped"
+                  }
+
+                  setContentView(layout)
+              }
+          }
+          EOF
+                - name: Create JarvisService
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          cat > app/src/main/java/com/jarvis/assistant/JarvisService.kt <<'EOF'
+          package com.jarvis.assistant
+
+          import android.app.*
+          import android.content.*
+          import android.content.pm.ServiceInfo
+          import android.os.*
+          import android.speech.*
+          import android.speech.tts.TextToSpeech
+          import android.speech.tts.UtteranceProgressListener
+          import org.json.JSONObject
+          import java.net.HttpURLConnection
+          import java.net.URL
+          import java.util.Locale
+
+          class JarvisService : Service(), TextToSpeech.OnInitListener {
+
+              private var tts: TextToSpeech? = null
+              private var recognizer: SpeechRecognizer? = null
+              private var running = false
+              private var ttsReady = false
+              private var language = "en-IN"
+              private var voiceIndex = 0
+              private val handler = Handler(Looper.getMainLooper())
+
+              override fun onCreate() {
+                  super.onCreate()
+                  createNotification()
+                  tts = TextToSpeech(this, this)
+              }
+
+              private fun createNotification() {
+                  val channelId = "jarvis_channel"
+
+                  if (Build.VERSION.SDK_INT >= 26) {
+                      val channel = NotificationChannel(
+                          channelId,
+                          "Jarvis Assistant",
+                          NotificationManager.IMPORTANCE_LOW
+                      )
+                      getSystemService(NotificationManager::class.java)
+                          .createNotificationChannel(channel)
+                  }
+
+                  val notification = Notification.Builder(this, channelId)
+                      .setContentTitle("Jarvis is running")
+                      .setContentText("Voice assistant active")
+                      .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                      .build()
+
+                  if (Build.VERSION.SDK_INT >= 29) {
+                      startForeground(
+                          1,
+                          notification,
+                          ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                      )
+                  } else {
+                      startForeground(1, notification)
+                  }
+              }
+
+              override fun onStartCommand(
+                  intent: Intent?,
+                  flags: Int,
+                  startId: Int
+              ): Int {
+                  when (intent?.action) {
+                      "MODE_EN" -> {
+                          language = "en-IN"
+                          say("English mode selected")
+                      }
+                      "MODE_HI" -> {
+                          language = "hi-IN"
+                          say("Hindi mode chalu hai")
+                      }
+                      "VOICE" -> changeVoice()
+                      "START" -> {
+                          running = true
+                          say(if (language == "hi-IN") "Jarvis taiyar hai" else "Jarvis is ready")
+                      }
+                  }
+                  return START_STICKY
+              }
+
+              override fun onInit(status: Int) {
+                  if (status == TextToSpeech.SUCCESS) {
+                      ttsReady = true
+                      tts?.language = Locale.forLanguageTag(language)
+                      tts?.setOnUtteranceProgressListener(
+                          object : UtteranceProgressListener() {
+                              override fun onStart(id: String?) {}
+                              override fun onError(id: String?) {}
+                              override fun onDone(id: String?) {
+                                  if (running) {
+                                      handler.post {
+                                          startListening()
+                                      }
+                                  }
+                              }
+                          }
+                      )
+                  }
+              }
+
+              private fun say(message: String) {
+                  if (!ttsReady) return
+
+                  val hindi = message.any { it in '\u0900'..'\u097F' }
+                  val locale = if (hindi) Locale.forLanguageTag("hi-IN")
+                               else Locale.forLanguageTag("en-IN")
+
+                  tts?.language = locale
+                  tts?.speak(
+                      message,
+                      TextToSpeech.QUEUE_FLUSH,
+                      null,
+                      "jarvis_${System.currentTimeMillis()}"
+                  )
+              }
+
+              private fun changeVoice() {
+                  if (!ttsReady) return
+
+                  val hindi = language == "hi-IN"
+                  val voices = tts?.voices?.filter {
+                      it.locale.language == if (hindi) "hi" else "en"
+                  } ?: emptyList()
+
+                  if (voices.isNotEmpty()) {
+                      voiceIndex = (voiceIndex + 1) % voices.size
+                      tts?.voice = voices[voiceIndex]
+                      say(if (hindi) "Awaaz badal di gayi hai" else "Voice changed")
+                  } else {
+                      say("No additional voices are installed")
+                  }
+              }
+
+              private fun startListening() {
+                  if (!running || !SpeechRecognizer.isRecognitionAvailable(this)) return
+
+                  try {
+                      if (recognizer == null) {
+                          recognizer = SpeechRecognizer.createSpeechRecognizer(this)
+                          recognizer?.setRecognitionListener(
+                              object : RecognitionListener {
+                                  override fun onReadyForSpeech(params: Bundle?) {}
+                                  override fun onBeginningOfSpeech() {}
+                                  override fun onRmsChanged(rmsdB: Float) {}
+                                  override fun onBufferReceived(buffer: ByteArray?) {}
+                                  override fun onEndOfSpeech() {}
+                                  override fun onEvent(eventType: Int, params: Bundle?) {}
+
+                                  override fun onError(error: Int) {
+                                      if (running) {
+                                          handler.postDelayed({ startListening() }, 1200)
+                                      }
+                                  }
+
+                                  override fun onResults(results: Bundle?) {
+                                      val words = results?.getStringArrayList(
+                                          SpeechRecognizer.RESULTS_RECOGNITION
+                                      )
+                                      val command = words?.firstOrNull()
+                                      if (!command.isNullOrBlank()) {
+                                          askGemini(command)
+                                      } else if (running) {
+                                          startListening()
+                                      }
+                                  }
+
+                                  override fun onPartialResults(partialResults: Bundle?) {}
+                              }
+                          )
+                      }
+
+                      val speechIntent = Intent(
+                          RecognizerIntent.ACTION_RECOGNIZE_SPEECH
+                      ).apply {
+                          putExtra(
+                              RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                              RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                          )
+                          putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
+                          putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+                      }
+
+                      recognizer?.startListening(speechIntent)
+                  } catch (_: Exception) {
+                      handler.postDelayed({ startListening() }, 1500)
+                  }
+              }
+
+              private fun askGemini(question: String) {
+                  Thread {
+                      try {
+                          val key = BuildConfig.GEMINI_API_KEY
+                          if (key.isBlank()) {
+                              handler.post { say("Gemini API key is missing") }
+                              return@Thread
+                          }
+
+                          val url = URL(
+                              "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$key"
+                          )
+
+                          val connection = url.openConnection() as HttpURLConnection
+                          connection.requestMethod = "POST"
+                          connection.connectTimeout = 20000
+                          connection.readTimeout = 30000
+                          connection.doOutput = true
+                          connection.setRequestProperty(
+                              "Content-Type",
+                              "application/json"
+                          )
+
+                          val body = JSONObject().apply {
+                              put("contents", org.json.JSONArray().put(
+                                  JSONObject().put(
+                                      "parts",
+                                      org.json.JSONArray().put(
+                                          JSONObject().put(
+                                              "text",
+                                              "You are Jarvis, a helpful voice assistant. Reply briefly in the same language as the user. User says: $question"
+                                          )
+                                      )
+                                  )
+                              ))
+                          }
+
+                          connection.outputStream.use {
+                              it.write(body.toString().toByteArray())
+                          }
+
+                          val response = if (connection.responseCode in 200..299) {
+                              connection.inputStream.bufferedReader().use { it.readText() }
+                          } else {
+                              connection.errorStream?.bufferedReader()?.use { it.readText() }
+                                  ?: "Request failed"
+                          }
+
+                          connection.disconnect()
+
+                          val answer = JSONObject(response)
+                              .optJSONArray("candidates")
+                              ?.optJSONObject(0)
+                              ?.optJSONObject("content")
+                              ?.optJSONArray("parts")
+                              ?.optJSONObject(0)
+                              ?.optString("text")
+                              ?: "I could not understand the response"
+
+                          handler.post { say(answer) }
+
+                      } catch (e: Exception) {
+                          handler.post { say("Internet connection error") }
+                      }
+                  }.start()
+              }
+
+              override fun onDestroy() {
+                  running = false
+                  handler.removeCallbacksAndMessages(null)
+                  recognizer?.destroy()
+                  recognizer = null
+                  tts?.stop()
+                  tts?.shutdown()
+                  super.onDestroy()
+              }
+
+              override fun onBind(intent: Intent?): IBinder? = null
+          }
+          EOF
+
+      - name: Build Jarvis APK
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          gradle --no-daemon assembleDebug
+
+      - name: Upload Jarvis APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jarvis-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          
